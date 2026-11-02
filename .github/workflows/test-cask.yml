@@ -57,9 +57,12 @@ jobs:
       # Homebrew quarantines what a cask downloads, so Gatekeeper checks the
       # binary the first time it runs; a bare binary cannot carry a stapled
       # ticket, so it passes only on Apple's online record of its notarization.
-      # spctl exits 3 on a rejection; its output says why, so it is printed first.
+      # Apple Silicon only: the Intel runner's lookup of that record fails at
+      # random, rejecting a binary it accepted the run before. Both binaries
+      # are notarized in one submission. spctl exits 3 on a rejection and says
+      # why, so its output is printed first.
       - name: Check Gatekeeper accepts it
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
         run: |
           bin=$(readlink -f "$(brew --prefix)/bin/swale")
           xattr -p com.apple.quarantine "$bin"
