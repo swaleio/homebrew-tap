@@ -1,0 +1,68 @@
+name: Test the cask
+
+# Checks the cask the way users get it: linted and audited as Homebrew does,
+# then installed from this tap on every machine type it serves.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-cask-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      # Checks this repository out as the swaleio/tap tap and trusts it.
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
+
+      - name: Lint
+        run: brew style swaleio/tap
+
+      # --online also fetches every URL the cask can resolve to.
+      - name: Audit
+        run: brew audit --cask --strict --online swaleio/tap/swale
+
+  install:
+    name: Install on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # One runner per build the cask resolves to.
+        runner: [macos-15, macos-15-intel, ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04 # 2026.10.26.1
+
+      - name: Install
+        run: brew install --cask swaleio/tap/swale
+
+      - name: Check the version
+        run: |
+          expected=$(sed -n 's/^  version "\(.*\)"$/\1/p' Casks/swale.rb)
+          reported=$(swale --version)
+          [[ "$reported" == "$expected" ]] || { echo "::error::swale reports ${reported}, the cask installs ${expected}."; exit 1; }
+
+      # Homebrew quarantines what a cask downloads, so Gatekeeper checks the
+      # binary the first time it runs; a bare binary cannot carry a stapled
+      # ticket, so it passes only on Apple's online record of its notarization.
+      # spctl exits 3 on a rejection; its output says why, so it is printed first.
+      - name: Check Gatekeeper accepts it
+        if: runner.os == 'macOS'
+        run: |
+          bin=$(readlink -f "$(brew --prefix)/bin/swale")
+          xattr -p com.apple.quarantine "$bin"
+          assessment=$(spctl --assess --type install --verbose=2 "$bin" 2>&1) || true
+          echo "$assessment"
+          [[ "$assessment" == *": accepted"* && "$assessment" == *"source=Notarized Developer ID"* ]] || { echo "::error::Gatekeeper does not accept the binary as notarized."; exit 1; }
